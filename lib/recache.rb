@@ -89,7 +89,7 @@ module Recache
       if opts == nil then opts = {} end
       options = {:just_hash => true}.merge( opts )
       hash = @api.send( method, options )
-      return RecacheStore.find(:first, :conditions => ['cached_until > NOW() AND request_hash = ?',hash.to_s], :order => 'id DESC' ), false
+      return RecacheStore.find(:first, :conditions => ['cached_until > ? AND request_hash = ?',Time.now - Time.zone.now.utc_offset, hash.to_s], :order => 'id DESC' ), false
     end
     
     # Updates a given cache method/arg hash from Reve
