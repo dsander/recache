@@ -11,14 +11,15 @@ end
 unless Reve
   raise ReveError, "The Reve plugin was not found. Is it installed?"
 end
-RECACHE_LOGGER = Logger.new("#{RAILS_ROOT}/log/recache_#{RAILS_ENV}.log")
+RECACHE_LOGGER = Logger.new("#{defined?(RAILS_ROOT) ? RAILS_ROOT : '.'}/log/recache_#{defined?(RAILS_ENV) ? RAILS_ENV : ''}.log")
 module Recache
   class API
     @@last_call_updated = true
     @@http_user_agent = "Recached 1.1/Reve"
     @@last_hash = nil
     @@cached_until = nil
-    cattr_accessor :last_call_updated, :http_user_agent, :last_hash, :cached_until
+    @@cache_store = nil
+    cattr_accessor :last_call_updated, :http_user_agent, :last_hash, :cached_until, :cache_store
     # As with Reve's initialize function- parameters are all the same.
     # Loads up a new instance of Reve and sets user/key/character IDs
     # Expects:
@@ -39,6 +40,9 @@ module Recache
         @api = Reve::API.new(@user_id, @key, @character_id)
       end
       @api.http_user_agent = @@http_user_agent
+      unless @@cache_store
+        @@cache_store = RecacheStore
+      end
     end
     
     # Default handler for any incoming methods that Recache doesn't have explicitly defined.
@@ -55,14 +59,14 @@ module Recache
       end
       cache, @@last_call_updated = get_cache_if_available( method, arg_hash )
       if cache
-        if cache.cached_until.to_time < Time.now
+        if cache.cached_until.to_time < Time.now.utc
           cache, @@last_call_updated = update_cache( method, arg_hash )
         end
       else
         cache, @@last_call_updated = update_cache( method, arg_hash )
       end
       # Flip/flop between returning the Reve data class or our serialised Reve data class.
-      if cache.class == RecacheStore
+      if cache.class == RecacheStore && cache.class == MemcachedRecacheStore
         return cache.data
       else
         return cache
@@ -75,7 +79,7 @@ module Recache
     def next_update?(method, opts={})
       options = {:just_hash => true}.merge( opts )
       hash = @api.send( method, options )
-      return RecacheStore.find_by_request_hash( hash.to_s, :order => 'cached_until DESC' ).cached_until
+      return @@cache_store.find_by_request_hash( hash.to_s, :order => 'cached_until DESC' ).cached_until
     end
     
   private
@@ -89,7 +93,7 @@ module Recache
       if opts == nil then opts = {} end
       options = {:just_hash => true}.merge( opts )
       hash = @api.send( method, options )
-      return RecacheStore.find(:first, :conditions => ['cached_until > ? AND request_hash = ?',Time.now - Time.zone.now.utc_offset, hash.to_s], :order => 'id DESC' ), false
+      return @@cache_store.find(:first, :conditions => ['cached_until > ? AND request_hash = ?',Time.now.utc, hash.to_s], :order => 'id DESC' ), false
     end
     
     # Updates a given cache method/arg hash from Reve
@@ -101,8 +105,8 @@ module Recache
       if args == nil then args = {} end
       revedat = @api.send( method, args )
       # First we clear out any old caches - delete instead of destroy, if you have anything depending on caches you're insane
-      RecacheStore.delete_all( ['request_hash = ?', @api.last_hash] )
-      RecacheStore.create( :request_hash => @api.last_hash, :data => revedat, :cached_until => @api.cached_until )
+      @@cache_store.delete_all( ['request_hash = ?', @api.last_hash] )
+      @@cache_store.create( :request_hash => @api.last_hash, :data => revedat, :cached_until => @api.cached_until )
       return revedat, true
     end
     
